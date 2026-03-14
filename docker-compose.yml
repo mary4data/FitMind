@@ -1,0 +1,30 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - '8080:8080'
+    environment:
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GCS_BUCKET=${GCS_BUCKET}
+      - FRONTEND_URL=http://localhost:3000
+      - NODE_ENV=production
+    volumes:
+      - ./backend/service-account.json:/app/service-account.json:ro
+    env_file:
+      - .env
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - '3000:3000'
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8080
+    depends_on:
+      - backend
