@@ -164,7 +164,7 @@ gcloud run deploy fitmind-backend \
   --allow-unauthenticated \
   --set-env-vars \
     GOOGLE_CLOUD_PROJECT=$PROJECT_ID,\
-    GEMINI_API_KEY=your-gemini-api-key,\
+    VERTEX_LOCATION=$REGION,\
     GCS_BUCKET=$PROJECT_ID.appspot.com,\
     FRONTEND_URL=https://your-project.web.app \
   --min-instances 0 \
