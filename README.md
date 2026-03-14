@@ -1,7 +1,6 @@
 # FitMind — AI Fitness Coach That Sees & Hears You
 
-> Real-time posture correction, voice-guided workouts, and personalized plans — all from your browser.
-> Powered by **Gemini 2.5 Flash** + **Google Cloud**.
+> Real-time posture correction, voice-guided workouts, and personalized plans — powered by **Gemini 2.5 Flash** + **Firebase** + **Google Cloud Run**.
 
 ---
 
@@ -9,222 +8,246 @@
 
 ```
 FitMind/
-├── frontend/                   # Next.js 15 + React 19 + Tailwind
+├── frontend/                   # Next.js 15 + React 19 + Tailwind + Firebase client SDK
 │   ├── app/
-│   │   ├── page.tsx            # Landing page (hero + features)
-│   │   ├── goals/page.tsx      # 3-step goal input wizard
-│   │   ├── coaching/page.tsx   # Live coaching interface (webcam + voice)
-│   │   └── summary/page.tsx    # Post-session analysis + highlights
-│   ├── components/
-│   │   └── Navbar.tsx
-│   └── lib/api.ts              # Type-safe API client
+│   │   ├── page.tsx            # Landing page
+│   │   ├── goals/page.tsx      # 3-step goal wizard → Gemini plan
+│   │   ├── coaching/page.tsx   # Live coaching (webcam + voice)
+│   │   └── summary/page.tsx    # Post-session analysis
+│   ├── components/Navbar.tsx
+│   └── lib/
+│       ├── api.ts              # Express backend client
+│       └── firebase.ts         # Firebase client SDK init
 │
-├── backend/                    # Node.js + Express + TypeScript
+├── backend/                    # Node.js + Express + TypeScript + Firebase Admin SDK
 │   └── src/
-│       ├── agents/
-│       │   ├── goalPlanAgent.ts      # Gemini plan generation
-│       │   ├── liveCoachingAgent.ts  # Real-time vision coaching
-│       │   └── feedbackAgent.ts      # Post-session analysis
-│       ├── services/
-│       │   ├── gemini.ts             # Gemini 2.5 Flash API
-│       │   ├── firestore.ts          # Firestore DB operations
-│       │   ├── storage.ts            # GCS video uploads
-│       │   ├── textToSpeech.ts       # Google TTS
-│       │   └── speechToText.ts       # Google STT
-│       ├── prompts/                  # Prompt templates
-│       └── routes/                   # Express endpoints
+│       ├── agents/             # goalPlanAgent · liveCoachingAgent · feedbackAgent
+│       ├── services/           # gemini · firestore · storage · tts · stt
+│       ├── prompts/            # Gemini prompt templates
+│       └── routes/             # goals · coaching · sessions · upload
 │
-├── docker-compose.yml
-└── README.md
+├── firebase.json               # Firebase Hosting + Firestore + Storage config
+├── .firebaserc                 # Project alias
+├── firestore.rules             # Firestore security rules
+├── firestore.indexes.json      # Compound indexes (userId + startedAt)
+└── storage.rules               # Cloud Storage security rules
 ```
 
 ---
 
-## Prerequisites
+## Prerequisites — install these CLIs once
 
-- Node.js 20+
-- Google Cloud project with these APIs enabled:
-  - Gemini API (Google AI Studio or Vertex AI)
-  - Firestore
-  - Cloud Storage
-  - Cloud Text-to-Speech
-  - Cloud Speech-to-Text
-  - Cloud Run (for deployment)
-- A service account JSON key with the above permissions
+```bash
+# 1. Google Cloud SDK
+curl https://sdk.cloud.google.com | bash
+gcloud init
+
+# 2. Firebase CLI
+npm install -g firebase-tools
+firebase login
+
+# 3. Node.js 20+  (use nvm if needed)
+nvm install 20 && nvm use 20
+```
 
 ---
 
-## Local Setup
-
-### 1. Clone & configure environment
+## One-time Google Cloud & Firebase setup
 
 ```bash
-git clone <repo-url>
-cd FitMind
+export PROJECT_ID=your-firebase-project-id
+export REGION=us-central1
 
-# Backend
-cp backend/.env.example backend/.env
-# Edit backend/.env — add GEMINI_API_KEY, GOOGLE_CLOUD_PROJECT, etc.
+# Set active project for both CLIs
+gcloud config set project $PROJECT_ID
+firebase use $PROJECT_ID          # also updates .firebaserc
+
+# Enable required GCP APIs
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  firestore.googleapis.com \
+  storage.googleapis.com \
+  texttospeech.googleapis.com \
+  speech.googleapis.com \
+  aiplatform.googleapis.com
+
+# Create Firestore database (native mode)
+gcloud firestore databases create --location=$REGION
+
+# Deploy Firestore rules + indexes
+firebase deploy --only firestore
+
+# Deploy Storage rules
+firebase deploy --only storage
+
+# Create a service account for local dev (Cloud Run uses its own SA automatically)
+gcloud iam service-accounts create fitmind-dev \
+  --display-name "FitMind local dev"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:fitmind-dev@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/owner"     # narrow this down before production
+
+gcloud iam service-accounts keys create backend/service-account.json \
+  --iam-account=fitmind-dev@$PROJECT_ID.iam.gserviceaccount.com
+```
+
+---
+
+## Local development
+
+### 1. Configure environment files
+
+```bash
+# Root / backend
+cp .env.example backend/.env
+# Fill in: GOOGLE_CLOUD_PROJECT, GEMINI_API_KEY, GCS_BUCKET, GOOGLE_APPLICATION_CREDENTIALS
 
 # Frontend
-cp frontend/.env.example frontend/.env.local
-# NEXT_PUBLIC_API_URL=http://localhost:8080
+cp .env.example frontend/.env.local
+# Fill in all NEXT_PUBLIC_FIREBASE_* values
+# (Firebase Console → Project Settings → Your apps → Web app → Config)
 ```
 
 ### 2. Install dependencies
 
 ```bash
-# Backend
-cd backend && npm install
-
-# Frontend
+cd backend  && npm install
 cd ../frontend && npm install
 ```
 
-### 3. Run locally (two terminals)
+### 3a. Run with Firebase Emulators (fully offline, recommended)
+
+```bash
+# Terminal 1 — Firestore + Storage emulators
+firebase emulators:start --only firestore,storage
+
+# Terminal 2 — Backend (points to emulators via env vars)
+cd backend
+FIRESTORE_EMULATOR_HOST=localhost:8081 \
+FIREBASE_STORAGE_EMULATOR_HOST=localhost:9199 \
+npm run dev
+
+# Terminal 3 — Frontend
+cd frontend && npm run dev
+```
+
+Open `http://localhost:4000` for the **Firebase Emulator UI**.
+
+### 3b. Run against live Firebase (requires service account)
 
 ```bash
 # Terminal 1 — Backend
-cd backend
-npm run dev
-# → http://localhost:8080
+cd backend && npm run dev     # reads backend/.env
 
 # Terminal 2 — Frontend
-cd frontend
-npm run dev
-# → http://localhost:3000
+cd frontend && npm run dev    # reads frontend/.env.local
 ```
 
 ---
 
-## API Reference
+## Deploy to Google Cloud
 
-### Goals & Plan
-
-```bash
-# Generate a personalized fitness plan
-POST /api/goals
-{
-  "name": "Alex",
-  "primaryGoal": "weight_loss",
-  "fitnessLevel": "intermediate",
-  "weeklyWorkoutDays": 4,
-  "currentWeight": 80,
-  "targetWeight": 72
-}
-# → { userId, plan: { weeklySchedule, nutritionGuidelines }, motivationalMessage }
-
-# Get user profile
-GET /api/goals/:userId
-```
-
-### Live Coaching
+### Backend → Cloud Run
 
 ```bash
-# Start a session
-POST /api/coaching/session
-{ "userId": "...", "exercise": "Squat" }
-# → { sessionId }
-
-# Analyze a video frame
-POST /api/coaching/frame
-{
-  "sessionId": "...",
-  "frameBase64": "data:image/jpeg;base64,...",
-  "exercise": "Squat",
-  "repCount": 5,
-  "setNumber": 2,
-  "targetReps": 12
-}
-# → { text, audioBase64, formScore, repDetected }
-
-# Streaming coaching (SSE)
-POST /api/coaching/frame/stream   # → text/event-stream
-
-# Voice command
-POST /api/coaching/voice
-{ "sessionId": "...", "audioBase64": "...", "exercise": "Squat" }
-# → { transcript, text, audioBase64 }
-```
-
-### Sessions
-
-```bash
-# End session + AI summary
-POST /api/sessions/:sessionId/end
-{ "durationSeconds": 1934, "formAccuracy": 87 }
-# → { sessionId, summary: { overallScore, coachQuote, estimatedCalories, ... } }
-
-# Session history
-GET /api/sessions/user/:userId
-```
-
----
-
-## Google Cloud Deployment
-
-### Build and push Docker images
-
-```bash
-export PROJECT_ID=your-gcp-project-id
-export REGION=us-central1
-
-# Backend
 cd backend
-gcloud builds submit --tag gcr.io/$PROJECT_ID/fitmind-backend .
 
-# Frontend
-cd ../frontend
+# Build & push via Cloud Build (no local Docker needed)
 gcloud builds submit \
-  --tag gcr.io/$PROJECT_ID/fitmind-frontend \
-  --build-arg NEXT_PUBLIC_API_URL=https://fitmind-backend-<hash>-uc.a.run.app .
-```
+  --tag gcr.io/$PROJECT_ID/fitmind-backend \
+  --project $PROJECT_ID
 
-### Deploy to Cloud Run
-
-```bash
-# Backend
+# Deploy to Cloud Run
 gcloud run deploy fitmind-backend \
   --image gcr.io/$PROJECT_ID/fitmind-backend \
   --platform managed \
   --region $REGION \
   --allow-unauthenticated \
-  --set-env-vars GEMINI_API_KEY=your-key,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GCS_BUCKET=fitmind-sessions
+  --set-env-vars \
+    GOOGLE_CLOUD_PROJECT=$PROJECT_ID,\
+    GEMINI_API_KEY=your-gemini-api-key,\
+    GCS_BUCKET=$PROJECT_ID.appspot.com,\
+    FRONTEND_URL=https://your-project.web.app \
+  --min-instances 0 \
+  --max-instances 10 \
+  --memory 512Mi
 
-# Frontend (after getting the backend URL above)
+# Grab the backend URL
+BACKEND_URL=$(gcloud run services describe fitmind-backend \
+  --platform managed --region $REGION \
+  --format 'value(status.url)')
+echo "Backend: $BACKEND_URL"
+```
+
+> Cloud Run's service account automatically has `roles/datastore.user` and `roles/storage.objectAdmin` — **no key file needed in production**.
+
+### Frontend → Firebase Hosting (backed by Cloud Run)
+
+```bash
+cd frontend
+
+# Build Next.js with the live backend URL
+NEXT_PUBLIC_API_URL=$BACKEND_URL \
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=$PROJECT_ID \
+npm run build
+
+# Build & push frontend container
+gcloud builds submit \
+  --tag gcr.io/$PROJECT_ID/fitmind-frontend \
+  --build-arg NEXT_PUBLIC_API_URL=$BACKEND_URL \
+  --project $PROJECT_ID
+
 gcloud run deploy fitmind-frontend \
   --image gcr.io/$PROJECT_ID/fitmind-frontend \
   --platform managed \
   --region $REGION \
-  --allow-unauthenticated \
-  --set-env-vars NEXT_PUBLIC_API_URL=https://fitmind-backend-<hash>-uc.a.run.app
+  --allow-unauthenticated
+
+# Point Firebase Hosting at the frontend Cloud Run service
+firebase deploy --only hosting
 ```
 
-### Firestore setup
+Your app is now live at `https://$PROJECT_ID.web.app`.
+
+---
+
+## Deploy Firestore rules & indexes (any time you change them)
 
 ```bash
-gcloud firestore databases create --region=$REGION
+firebase deploy --only firestore:rules
+firebase deploy --only firestore:indexes
+firebase deploy --only storage
 ```
 
-### GCS bucket
+---
 
-```bash
-gsutil mb -l $REGION gs://fitmind-sessions
-gsutil iam ch allUsers:objectViewer gs://fitmind-sessions  # public read for demo
-```
+## Key API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/goals` | Create user + generate Gemini fitness plan |
+| GET | `/api/goals/:userId` | Fetch user profile + plan |
+| POST | `/api/coaching/session` | Start a coaching session |
+| POST | `/api/coaching/frame` | Analyze webcam frame (vision + TTS) |
+| POST | `/api/coaching/frame/stream` | SSE streaming coaching response |
+| POST | `/api/coaching/voice` | STT → Gemini → TTS voice loop |
+| POST | `/api/sessions/:id/end` | End session + AI summary |
+| GET | `/api/sessions/user/:userId` | Session history + streak |
+| POST | `/api/upload/session-video` | Upload recording to Cloud Storage |
 
 ---
 
 ## Hackathon Demo Steps
 
-1. **Open** `http://localhost:3000` — Land on the warm hero page
-2. **Click** "Get Started" → fill out the 3-step goal wizard (name, goal, schedule)
-3. **Watch** Gemini 2.5 Flash generate a personalized weekly plan + nutrition guide in ~3s
-4. **Click** "Start Session" on the coaching page → webcam activates
-5. **Perform** any exercise (squat, push-up, plank) — AI analyzes your form every 4s
-6. **Speak** "Am I keeping good form?" → voice coaching response plays back
-7. **Click** "End Session" → redirected to the summary page
-8. **See** your score, calories, streak, highlights, and AI coach quote
+1. Open `https://your-project.web.app`
+2. Click **Get Started** → fill the 3-step goal wizard
+3. Gemini 2.5 Flash generates a personalized plan in ~3 s
+4. Click **Start Session** — webcam activates, AI analyzes form every 4 s
+5. Perform squats/push-ups — hear live voice coaching via TTS
+6. Say "Am I doing this right?" — voice is transcribed and answered
+7. Click **End Session** → Summary page shows stats, streak, highlights, AI quote
 
 ---
 
@@ -232,18 +255,13 @@ gsutil iam ch allUsers:objectViewer gs://fitmind-sessions  # public read for dem
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 15, React 19, Tailwind CSS 3 |
-| Backend | Node.js 20, Express 4, TypeScript |
+| Frontend | Next.js 15, React 19, Tailwind CSS, Firebase JS SDK v10 |
+| Backend | Node.js 20, Express 4, TypeScript, Firebase Admin SDK v12 |
 | AI / LLM | Gemini 2.5 Flash (`gemini-2.5-flash-preview-04-17`) |
-| Vision | Gemini multimodal (inline base64 frames) |
+| Vision | Gemini multimodal (inline JPEG frames) |
 | Voice In | Google Cloud Speech-to-Text |
-| Voice Out | Google Cloud Text-to-Speech (Neural2) |
-| Database | Google Cloud Firestore |
-| Storage | Google Cloud Storage |
-| Deploy | Google Cloud Run |
-
----
-
-## License
-
-MIT — Built for [Google Cloud Hackathon 2026]
+| Voice Out | Google Cloud Text-to-Speech Neural2 |
+| Database | Firebase Firestore (native mode) |
+| Storage | Firebase / Cloud Storage |
+| Deploy | Google Cloud Run + Firebase Hosting |
+| CI/CD | Google Cloud Build |

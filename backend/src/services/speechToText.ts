@@ -34,12 +34,12 @@ export async function streamingTranscribe(
 ): Promise<void> {
   const recognizeStream = client
     .streamingRecognize({
+      interimResults: true,
       config: {
         encoding: 'WEBM_OPUS' as const,
         sampleRateHertz: 48000,
         languageCode: 'en-US',
         enableAutomaticPunctuation: true,
-        interimResults: true,
       },
     })
     .on('data', (data) => {

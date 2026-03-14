@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import * as admin from 'firebase-admin';
 import { goalsRouter } from './routes/goals';
 import { coachingRouter } from './routes/coaching';
 import { sessionsRouter } from './routes/sessions';
@@ -10,6 +11,18 @@ import { uploadRouter } from './routes/upload';
 import { logger } from './utils/logger';
 
 dotenv.config();
+
+// ── Firebase Admin SDK init ───────────────────────────────────────────────────
+// On Cloud Run: uses the attached service account automatically (no key file needed).
+// Locally: set GOOGLE_APPLICATION_CREDENTIALS to your service account JSON path.
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+    projectId: process.env.GOOGLE_CLOUD_PROJECT,
+    storageBucket: process.env.GCS_BUCKET,
+  });
+  logger.info('Firebase Admin initialized', { project: process.env.GOOGLE_CLOUD_PROJECT });
+}
 
 const app = express();
 const PORT = process.env.PORT || 8080;
