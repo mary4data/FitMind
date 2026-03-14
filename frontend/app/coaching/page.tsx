@@ -18,6 +18,8 @@ export default function CoachingPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isStartingRef = useRef(false);
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isActive, setIsActive] = useState(false);
@@ -102,6 +104,9 @@ export default function CoachingPage() {
 
   // Start session
   async function startSession() {
+    if (isStartingRef.current || isActive) return; // prevent double-clicks
+    isStartingRef.current = true;
+
     const userStr = sessionStorage.getItem('fitmind_user');
     const userId = userStr ? JSON.parse(userStr).userId : 'demo-user';
 
@@ -114,38 +119,30 @@ export default function CoachingPage() {
       const data = await res.json();
       setSessionId(data.sessionId);
     } catch {
-      // Demo mode — use fake session ID
       setSessionId('demo-session-' + Date.now());
     }
 
     await startCamera();
     setIsActive(true);
     startTimeRef.current = Date.now();
+    isStartingRef.current = false;
 
-    // Timer
-    const timerInterval = setInterval(() => {
+    timerRef.current = setInterval(() => {
       setElapsed((prev) => {
         const newElapsed = prev + 1;
-        setCalories(Math.floor(newElapsed * 0.25)); // ~15 cal/min
+        setCalories(Math.floor(newElapsed * 0.25));
         return newElapsed;
       });
     }, 1000);
 
-    // Frame analysis every 4 seconds
-    const frameInterval = setInterval(sendFrame, 4000);
-    intervalRef.current = frameInterval;
-
-    // Cleanup timer on unmount
-    return () => {
-      clearInterval(timerInterval);
-      clearInterval(frameInterval);
-    };
+    intervalRef.current = setInterval(sendFrame, 4000);
   }
 
   // Stop session
   async function stopSession() {
     setIsActive(false);
     if (intervalRef.current) clearInterval(intervalRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
 
     // Stop media
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -227,6 +224,7 @@ export default function CoachingPage() {
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      if (timerRef.current) clearInterval(timerRef.current);
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);

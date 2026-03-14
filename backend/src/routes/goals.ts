@@ -43,11 +43,12 @@ goalsRouter.post('/', async (req, res) => {
 
     res.json({ userId, plan, motivationalMessage });
   } catch (err) {
-    logger.error('POST /goals error', { error: err });
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('POST /goals error', { error: message });
     if (err instanceof z.ZodError) {
       return res.status(400).json({ error: 'Validation error', details: err.errors });
     }
-    res.status(500).json({ error: 'Failed to generate fitness plan' });
+    res.status(500).json({ error: 'Failed to generate fitness plan', detail: message });
   }
 });
 
