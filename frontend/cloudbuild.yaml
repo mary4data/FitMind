@@ -1,0 +1,15 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/fitmind-frontend'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_API_URL=$_NEXT_PUBLIC_API_URL'
+      - '.'
+
+images:
+  - 'gcr.io/$PROJECT_ID/fitmind-frontend'
+
+substitutions:
+  _NEXT_PUBLIC_API_URL: 'http://localhost:8080'
