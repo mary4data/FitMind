@@ -55,7 +55,7 @@ nvm install 20 && nvm use 20
 ## One-time Google Cloud & Firebase setup
 
 ```bash
-export PROJECT_ID=your-firebase-project-id
+export PROJECT_ID=fitmind-490222
 export REGION=us-central1
 
 # Set active project for both CLIs
@@ -165,8 +165,8 @@ gcloud run deploy fitmind-backend \
   --set-env-vars \
     GOOGLE_CLOUD_PROJECT=$PROJECT_ID,\
     VERTEX_LOCATION=$REGION,\
-    GCS_BUCKET=$PROJECT_ID.appspot.com,\
-    FRONTEND_URL=https://your-project.web.app \
+    GCS_BUCKET=fitmind-490222.appspot.com,\
+    FRONTEND_URL=https://fitmind-490222.web.app \
   --min-instances 0 \
   --max-instances 10 \
   --memory 512Mi
@@ -238,7 +238,7 @@ firebase deploy --only storage
 
 ## Hackathon Demo Steps
 
-1. Open `https://your-project.web.app`
+1. Open `https://fitmind-490222.web.app`
 2. Click **Get Started** → fill the 3-step goal wizard
 3. Gemini 2.5 Flash generates a personalized plan in ~3 s
 4. Click **Start Session** — webcam activates, AI analyzes form every 4 s
