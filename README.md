@@ -73,41 +73,38 @@ gcloud services enable \
   aiplatform.googleapis.com
 
 # Create Firestore database (native mode)
-gcloud firestore databases create --location=$REGION
+gcloud firestore databases create \
+  --database="(default)" \
+  --location=$REGION \
+  --type=firestore-native
 
-# Deploy Firestore rules + indexes
-firebase deploy --only firestore
-
-# Deploy Storage rules
-firebase deploy --only storage
-
-# Create a service account for local dev (Cloud Run uses its own SA automatically)
-gcloud iam service-accounts create fitmind-dev \
-  --display-name "FitMind local dev"
-
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:fitmind-dev@$PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/owner"     # narrow this down before production
-
-gcloud iam service-accounts keys create backend/service-account.json \
-  --iam-account=fitmind-dev@$PROJECT_ID.iam.gserviceaccount.com
+# Deploy Firestore rules + indexes + Storage rules
+firebase deploy --only firestore,storage
 ```
 
 ---
 
 ## Local development
 
-### 1. Configure environment files
+### 1. Authenticate with Application Default Credentials
 
 ```bash
-# Root / backend
+# Your logged-in Google account IS the credential — no key file needed
+gcloud auth application-default login
+```
+
+### 2. Configure environment files
+
+```bash
+# Backend
 cp .env.example backend/.env
-# Fill in: GOOGLE_CLOUD_PROJECT, GEMINI_API_KEY, GCS_BUCKET, GOOGLE_APPLICATION_CREDENTIALS
+# Fill in: GOOGLE_CLOUD_PROJECT, GEMINI_API_KEY, GCS_BUCKET
+# Leave GOOGLE_APPLICATION_CREDENTIALS blank — ADC handles it automatically
 
 # Frontend
 cp .env.example frontend/.env.local
 # Fill in all NEXT_PUBLIC_FIREBASE_* values
-# (Firebase Console → Project Settings → Your apps → Web app → Config)
+# (Firebase Console → Project Settings → Your apps → Web app → SDK config snippet)
 ```
 
 ### 2. Install dependencies
@@ -135,11 +132,11 @@ cd frontend && npm run dev
 
 Open `http://localhost:4000` for the **Firebase Emulator UI**.
 
-### 3b. Run against live Firebase (requires service account)
+### 3b. Run against live Firebase (ADC — no key file needed)
 
 ```bash
 # Terminal 1 — Backend
-cd backend && npm run dev     # reads backend/.env
+cd backend && npm run dev     # reads backend/.env, uses gcloud ADC for auth
 
 # Terminal 2 — Frontend
 cd frontend && npm run dev    # reads frontend/.env.local
