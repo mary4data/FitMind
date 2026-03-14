@@ -8,7 +8,7 @@
   },
   "hosting": {
     "site": "fitmind-490222",
-    "public": "frontend/.next",
+    "public": "hosting",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       {
