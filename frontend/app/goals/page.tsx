@@ -1,7 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Navbar from '../../components/Navbar';
+import { useAuth } from '../../components/AuthProvider';
 
 const GOALS = [
   { id: 'weight_loss', label: 'Weight Loss', icon: '🔥' },
@@ -21,7 +22,38 @@ const DAYS = [2, 3, 4, 5, 6];
 
 export default function GoalsPage() {
   const router = useRouter();
+  const { user, loading: authLoading, getToken } = useAuth();
   const [step, setStep] = useState(1);
+  const [hasPlan, setHasPlan] = useState(false);
+  const [checkingPlan, setCheckingPlan] = useState(true);
+
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    if (!authLoading && !user) router.replace('/login');
+  }, [user, authLoading, router]);
+
+  // Check if user already has a plan
+  useEffect(() => {
+    if (authLoading || !user) return;
+    async function check() {
+      try {
+        const token = await getToken();
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/goals/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.plan) {
+            sessionStorage.setItem('fitmind_plan', JSON.stringify(data.plan));
+            setHasPlan(true);
+          }
+        }
+      } catch { /* no plan yet */ }
+      setCheckingPlan(false);
+    }
+    check();
+  }, [authLoading, user, getToken]);
+
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({
     name: '',
@@ -43,9 +75,10 @@ export default function GoalsPage() {
     setLoading(true);
     setError('');
     try {
+      const token = await getToken();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/goals`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           name: form.name,
           primaryGoal: form.primaryGoal,
@@ -69,6 +102,32 @@ export default function GoalsPage() {
       setLoading(false);
     }
   }
+
+  if (checkingPlan || authLoading) return null;
+
+  if (hasPlan) return (
+    <div className="min-h-screen flex items-center justify-center"
+      style={{ background: 'linear-gradient(135deg, #f3f0ff 0%, #ede9f6 50%, #fce7f3 100%)' }}>
+      <div className="bg-white rounded-3xl shadow-xl p-10 flex flex-col items-center gap-5 w-full max-w-sm text-center">
+        <div className="text-4xl">🎯</div>
+        <h2 className="font-display font-bold text-xl text-[#1a1a2e]">You already have a plan!</h2>
+        <p className="text-sm text-gray-400 font-body">Your personalised fitness plan is ready. Jump straight into your session.</p>
+        <button
+          onClick={() => router.push('/coaching')}
+          className="w-full py-3 rounded-full font-semibold text-white text-sm hover:opacity-90 transition"
+          style={{ backgroundColor: 'var(--brand-purple)' }}
+        >
+          🚀 Start Coaching Session
+        </button>
+        <button
+          onClick={() => setHasPlan(false)}
+          className="w-full py-3 rounded-full font-semibold text-sm border-2 border-gray-200 text-gray-500 hover:bg-gray-50"
+        >
+          ✏️ Update My Goals
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div

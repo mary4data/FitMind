@@ -5,6 +5,7 @@ import { createSession } from '../services/firestore';
 import { processCoachingFrame, processVoiceCommand, streamCoachingFrame } from '../agents/liveCoachingAgent';
 import { transcribeAudio } from '../services/speechToText';
 import { logger } from '../utils/logger';
+import { requireAuth, AuthRequest } from '../middleware/auth';
 
 export const coachingRouter = Router();
 
@@ -20,28 +21,30 @@ const FrameSchema = z.object({
 
 const VoiceSchema = z.object({
   sessionId: z.string(),
-  audioBase64: z.string(),
+  audioBase64: z.string().optional(),
+  transcript: z.string().optional(),
   exercise: z.string(),
+  coachGender: z.enum(['female', 'male']).default('female'),
 });
 
 // POST /api/coaching/session — start a new coaching session
-coachingRouter.post('/session', async (req, res) => {
+coachingRouter.post('/session', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const { userId, exercise } = req.body;
-    if (!userId) return res.status(400).json({ error: 'userId required' });
-
+    const { exercise } = req.body;
+    const userId = req.uid!;
     const sessionId = uuidv4();
     await createSession(userId, sessionId);
     logger.info('Coaching session started', { sessionId, userId, exercise });
     res.json({ sessionId });
   } catch (err) {
-    logger.error('POST /coaching/session error', { error: err });
-    res.status(500).json({ error: 'Failed to start session' });
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error('POST /coaching/session error', { error: errMsg, uid: req.uid });
+    res.status(500).json({ error: 'Failed to start session', detail: errMsg });
   }
 });
 
 // POST /api/coaching/frame — process a video frame and get coaching feedback
-coachingRouter.post('/frame', async (req, res) => {
+coachingRouter.post('/frame', requireAuth, async (req: AuthRequest, res) => {
   try {
     const frame = FrameSchema.parse(req.body);
     const response = await processCoachingFrame(frame);
@@ -56,7 +59,7 @@ coachingRouter.post('/frame', async (req, res) => {
 });
 
 // POST /api/coaching/frame/stream — SSE streaming coaching feedback
-coachingRouter.post('/frame/stream', async (req, res) => {
+coachingRouter.post('/frame/stream', requireAuth, async (req: AuthRequest, res) => {
   const frame = FrameSchema.parse(req.body);
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -76,17 +79,21 @@ coachingRouter.post('/frame/stream', async (req, res) => {
   }
 });
 
-// POST /api/coaching/voice — process voice command from user
-coachingRouter.post('/voice', async (req, res) => {
+// POST /api/coaching/voice — process voice command (transcript or audio)
+coachingRouter.post('/voice', requireAuth, async (req: AuthRequest, res) => {
   try {
     const body = VoiceSchema.parse(req.body);
 
-    // Transcribe audio to text
-    const transcript = await transcribeAudio(body.audioBase64);
+    // Accept direct transcript (Web Speech API) or base64 audio (MediaRecorder)
+    const transcript = body.transcript ?? await transcribeAudio(body.audioBase64 ?? '');
     logger.info('Voice transcribed', { sessionId: body.sessionId, transcript });
 
-    // Get coach response
-    const response = await processVoiceCommand(body.sessionId, transcript, body.exercise);
+    const response = await processVoiceCommand(
+      body.sessionId,
+      transcript,
+      body.exercise,
+      body.coachGender,
+    );
     res.json({ transcript, ...response });
   } catch (err) {
     logger.error('POST /coaching/voice error', { error: err });

@@ -254,7 +254,7 @@ firebase deploy --only storage
 |---|---|
 | Frontend | Next.js 15, React 19, Tailwind CSS, Firebase JS SDK v10 |
 | Backend | Node.js 20, Express 4, TypeScript, Firebase Admin SDK v12 |
-| AI / LLM | Gemini 2.5 Flash (`gemini-2.5-flash-preview-04-17`) |
+| AI / LLM | Gemini 2.5 Flash (`gemini-2.5-flash`) |
 | Vision | Gemini multimodal (inline JPEG frames) |
 | Voice In | Google Cloud Speech-to-Text |
 | Voice Out | Google Cloud Text-to-Speech Neural2 |

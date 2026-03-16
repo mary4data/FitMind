@@ -1,6 +1,7 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
+import { getAuth } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey:            process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -11,9 +12,9 @@ const firebaseConfig = {
   appId:             process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-// Avoid re-initializing on Next.js hot reloads
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 
 export const db      = getFirestore(app);
 export const storage = getStorage(app);
+export const auth    = getAuth(app);
 export default app;

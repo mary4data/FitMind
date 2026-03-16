@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid';
 import { createUser, getUser } from '../services/firestore';
 import { runGoalPlanAgent } from '../agents/goalPlanAgent';
 import { logger } from '../utils/logger';
+import { requireAuth, AuthRequest } from '../middleware/auth';
 
 export const goalsRouter = Router();
 
@@ -16,14 +16,13 @@ const GoalSchema = z.object({
   fitnessLevel: z.enum(['beginner', 'intermediate', 'advanced']),
   dietaryPreferences: z.array(z.string()).optional(),
   injuries: z.array(z.string()).optional(),
-  userId: z.string().optional(),
 });
 
 // POST /api/goals — create user + generate fitness plan
-goalsRouter.post('/', async (req, res) => {
+goalsRouter.post('/', requireAuth, async (req: AuthRequest, res) => {
   try {
     const body = GoalSchema.parse(req.body);
-    const userId = body.userId || uuidv4();
+    const userId = req.uid!;
 
     const goals = {
       primaryGoal: body.primaryGoal,
@@ -31,8 +30,8 @@ goalsRouter.post('/', async (req, res) => {
       targetWeight: body.targetWeight,
       weeklyWorkoutDays: body.weeklyWorkoutDays,
       fitnessLevel: body.fitnessLevel,
-      dietaryPreferences: body.dietaryPreferences,
-      injuries: body.injuries,
+      dietaryPreferences: body.dietaryPreferences ?? [],
+      injuries: body.injuries ?? [],
     };
 
     // Create user in Firestore
@@ -52,14 +51,14 @@ goalsRouter.post('/', async (req, res) => {
   }
 });
 
-// GET /api/goals/:userId — retrieve user profile + plan
-goalsRouter.get('/:userId', async (req, res) => {
+// GET /api/goals/me — retrieve current user profile + plan
+goalsRouter.get('/me', requireAuth, async (req: AuthRequest, res) => {
   try {
-    const user = await getUser(req.params.userId);
+    const user = await getUser(req.uid!);
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user);
   } catch (err) {
-    logger.error('GET /goals/:userId error', { error: err });
+    logger.error('GET /goals/me error', { error: err });
     res.status(500).json({ error: 'Failed to fetch user profile' });
   }
 });

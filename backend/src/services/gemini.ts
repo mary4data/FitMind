@@ -9,7 +9,7 @@ const vertex = new VertexAI({
   location: process.env.VERTEX_LOCATION || 'us-central1',
 });
 
-const MODEL = 'gemini-2.5-flash-preview-04-17';
+const MODEL = 'gemini-2.5-flash';
 
 function getModel(systemInstruction?: string) {
   return vertex.getGenerativeModel({

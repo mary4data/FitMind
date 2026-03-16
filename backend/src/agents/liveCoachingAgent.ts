@@ -68,9 +68,10 @@ export async function processCoachingFrame(frame: CoachingFrame): Promise<Coachi
 export async function processVoiceCommand(
   sessionId: string,
   transcript: string,
-  exercise: string
+  exercise: string,
+  coachGender: 'female' | 'male' = 'female'
 ): Promise<CoachingResponse> {
-  logger.info('LiveCoachingAgent voice command', { sessionId, transcript });
+  logger.info('LiveCoachingAgent voice command', { sessionId, transcript, coachGender });
 
   const prompt = buildVoiceResponsePrompt(transcript, exercise);
   const coachText = await generateWithVision(prompt, [], LIVE_COACHING_SYSTEM);

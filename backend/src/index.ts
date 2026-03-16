@@ -29,7 +29,13 @@ const PORT = process.env.PORT || 8080;
 
 // Middleware
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:3000', credentials: true }));
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'https://fitmind-490222.web.app',
+  'https://fitmind-490222.firebaseapp.com',
+  'http://localhost:3000',
+].filter(Boolean) as string[];
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(morgan('combined'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));

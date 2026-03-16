@@ -1,3 +1,5 @@
+'use client';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Navbar from '../components/Navbar';
 
@@ -34,7 +36,38 @@ const features = [
   },
 ];
 
+function formatDur(secs: number) {
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
 export default function LandingPage() {
+  const [heroData, setHeroData] = useState({
+    quote: 'Great form! Keep your core tight.',
+    duration: '12:34',
+    calories: 186,
+    sets: '3/5',
+    avatar: '🧘',
+    hasSession: false,
+  });
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem('fitmind_session');
+    if (!raw) return;
+    try {
+      const s = JSON.parse(raw);
+      const summary = s.summary;
+      const lastMessage = s.messages?.filter((m: { type: string }) => m.type === 'coach').pop();
+      setHeroData({
+        quote: summary?.coachQuote || lastMessage?.text || 'Great form! Keep your core tight.',
+        duration: summary?.durationFormatted || formatDur(s.durationSeconds || 0),
+        calories: summary?.estimatedCalories ?? s.calories ?? 186,
+        sets: `${s.messages?.filter((m: { type: string }) => m.type === 'coach').length ?? 3} tips`,
+        avatar: s.coachGender === 'male' ? '🧑🏋️' : '🧑‍🦱🏋️',
+        hasSession: true,
+      });
+    } catch { /* use defaults */ }
+  }, []);
   return (
     <div className="min-h-screen" style={{ backgroundColor: 'var(--brand-bg-warm)' }}>
       <Navbar />
@@ -62,7 +95,7 @@ export default function LandingPage() {
         {/* CTAs */}
         <div className="flex flex-wrap gap-4 justify-center mb-16">
           <Link
-            href="/goals"
+            href="/coaching"
             className="rounded-full px-8 py-3 text-white font-semibold text-base shadow-md transition-opacity hover:opacity-90 active:scale-95"
             style={{ backgroundColor: 'var(--brand-purple)' }}
           >
@@ -72,7 +105,7 @@ export default function LandingPage() {
             href="/summary"
             className="rounded-full px-8 py-3 font-semibold text-base border-2 border-[#7C5CFC] text-[#7C5CFC] bg-transparent hover:bg-purple-50 transition-colors"
           >
-            View Demo Summary
+            View Summary
           </Link>
         </div>
 
@@ -91,21 +124,22 @@ export default function LandingPage() {
             </div>
 
             {/* Avatar */}
-            <div className="text-5xl text-center mb-3">🧘</div>
+            <div className="text-5xl text-center mb-3">{heroData.avatar}</div>
 
             {/* Coach quote */}
-            <p
-              className="text-center font-display font-bold italic text-[#1a1a2e] text-lg mb-4 leading-snug"
-            >
-              "Great form! Keep your core tight."
+            <p className="text-center font-display font-bold italic text-[#1a1a2e] text-lg mb-4 leading-snug">
+              "{heroData.quote}"
             </p>
 
             {/* Stats row */}
             <div className="flex justify-around text-sm text-gray-600 font-body border-t border-white/60 pt-3">
-              <span>🕐 12:34</span>
-              <span>🔥 186 cal</span>
-              <span>💪 Set 3/5</span>
+              <span>🕐 {heroData.duration}</span>
+              <span>🔥 {heroData.calories} cal</span>
+              <span>💪 {heroData.sets}</span>
             </div>
+            {heroData.hasSession && (
+              <p className="text-xs text-center text-gray-400 mt-2">From your last session</p>
+            )}
           </div>
         </div>
       </section>

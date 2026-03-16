@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Navbar from '../../components/Navbar';
+import { useAuth } from '../../components/AuthProvider';
 
 interface CoachMessage {
   text: string;
@@ -11,8 +12,25 @@ interface CoachMessage {
 
 const EXERCISES = ['Squat', 'Push-Up', 'Plank', 'Lunge', 'Deadlift', 'Burpee'];
 
+interface WorkoutDay { day: string; focus: string; duration: number; exercises: { name: string; sets: number; reps: string }[] }
+interface FitnessPlan { weeklySchedule: WorkoutDay[]; nutritionGuidelines: { meals: string[]; dailyCalories: number } }
+
 export default function CoachingPage() {
   const router = useRouter();
+  const { user, loading: authLoading, getToken } = useAuth();
+  const getTokenRef = useRef(getToken);
+  useEffect(() => { getTokenRef.current = getToken; }, [getToken]);
+
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    if (!authLoading && !user) router.replace('/login');
+  }, [user, authLoading, router]);
+
+  // Load plan from sessionStorage
+  useEffect(() => {
+    const raw = sessionStorage.getItem('fitmind_plan');
+    if (raw) { try { setPlan(JSON.parse(raw)); } catch { /* ignore */ } }
+  }, []);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -32,6 +50,15 @@ export default function CoachingPage() {
   const [formScore, setFormScore] = useState(0);
   const [isListening, setIsListening] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
+  const isActiveRef = useRef(false);
+  const isMutedRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
+  const isCoachSpeakingRef = useRef(false);
+  const [coachGender, setCoachGender] = useState<'female' | 'male'>('female');
+  const [plan, setPlan] = useState<FitnessPlan | null>(null);
+  const [planOpen, setPlanOpen] = useState(true);
   const startTimeRef = useRef<number>(0);
 
   // Format elapsed time
@@ -65,16 +92,18 @@ export default function CoachingPage() {
 
   // Send frame to backend for coaching analysis
   const sendFrame = useCallback(async () => {
-    if (!sessionId || !isActive) return;
+    const sid = sessionIdRef.current;
+    if (!sid || !isActiveRef.current || isCoachSpeakingRef.current) return;
     const frameBase64 = captureFrame();
     if (!frameBase64) return;
 
     try {
+      const token = await getTokenRef.current();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/coaching/frame`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          sessionId,
+          sessionId: sid,
           frameBase64,
           exercise: currentExercise,
           repCount,
@@ -92,34 +121,39 @@ export default function CoachingPage() {
       if (data.formScore) setFormScore(data.formScore);
       if (data.repDetected) setRepCount((r) => r + 1);
 
-      // Play audio response
+      // Play audio response — block next frame while speaking
       if (data.audioBase64 && !isMuted) {
         const audio = new Audio(`data:audio/mp3;base64,${data.audioBase64}`);
-        audio.play().catch(() => {});
+        isCoachSpeakingRef.current = true;
+        audio.onended = () => { isCoachSpeakingRef.current = false; };
+        audio.onerror = () => { isCoachSpeakingRef.current = false; };
+        audio.play().catch(() => { isCoachSpeakingRef.current = false; });
       }
     } catch {
       // Silently skip on frame errors
     }
-  }, [sessionId, isActive, currentExercise, repCount, setNumber, isMuted]);
+  }, [currentExercise, repCount, setNumber]);
 
   // Start session
   async function startSession() {
     if (isStartingRef.current || isActive) return; // prevent double-clicks
     isStartingRef.current = true;
 
-    const userStr = sessionStorage.getItem('fitmind_user');
-    const userId = userStr ? JSON.parse(userStr).userId : 'demo-user';
-
+    let newSessionId = '';
     try {
+      const token = await getTokenRef.current();
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/coaching/session`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, exercise: currentExercise }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ exercise: currentExercise }),
       });
+      if (!res.ok) throw new Error(`Session API returned ${res.status}`);
       const data = await res.json();
-      setSessionId(data.sessionId);
+      newSessionId = data.sessionId;
+      setSessionId(newSessionId);
     } catch {
-      setSessionId('demo-session-' + Date.now());
+      newSessionId = 'demo-session-' + Date.now();
+      setSessionId(newSessionId);
     }
 
     await startCamera();
@@ -135,7 +169,8 @@ export default function CoachingPage() {
       });
     }, 1000);
 
-    intervalRef.current = setInterval(sendFrame, 4000);
+    intervalRef.current = setInterval(sendFrame, 10000);
+    startContinuousListening(newSessionId, currentExercise, coachGender);
   }
 
   // Stop session
@@ -143,81 +178,112 @@ export default function CoachingPage() {
     setIsActive(false);
     if (intervalRef.current) clearInterval(intervalRef.current);
     if (timerRef.current) clearInterval(timerRef.current);
+    stopContinuousListening();
 
     // Stop media
     streamRef.current?.getTracks().forEach((t) => t.stop());
 
-    // End session via API
-    if (sessionId && !sessionId.startsWith('demo')) {
+    // End session via API — capture real AI summary
+    let aiSummary = null;
+    const endSessionId = sessionIdRef.current;
+    if (endSessionId && !endSessionId.startsWith('demo')) {
       try {
-        await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/sessions/${sessionId}/end`, {
+        const endToken = await getTokenRef.current();
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/sessions/${endSessionId}/end`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${endToken}` },
           body: JSON.stringify({
             durationSeconds: elapsed,
             formAccuracy: formScore || 75,
           }),
         });
+        const data = await res.json();
+        if (res.ok && data.summary) aiSummary = data.summary;
       } catch {
         // Proceed to summary even if API fails
       }
     }
 
-    // Store session data for summary page
-    sessionStorage.setItem(
-      'fitmind_session',
-      JSON.stringify({ sessionId, elapsed, calories, formScore, highlights: messages })
-    );
+    // Store all real session data for summary page
+    sessionStorage.setItem('fitmind_session', JSON.stringify({
+      sessionId,
+      summary: aiSummary,
+      startedAt: startTimeRef.current,
+      durationSeconds: elapsed,
+      calories,
+      formAccuracy: formScore || 75,
+      messages,
+      coachGender,
+    }));
     router.push('/summary');
   }
 
-  // Voice input
-  async function startVoiceInput() {
-    if (!sessionId) return;
-    setIsListening(true);
+  // Keep refs in sync with state so callbacks always see latest values
+  useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
+  // Send transcript to coach
+  async function sendTranscript(transcript: string, sid: string, exercise: string, gender: 'female' | 'male') {
+    if (!transcript.trim()) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-      mediaRecorderRef.current = recorder;
-      const chunks: BlobPart[] = [];
+      const voiceToken = await getTokenRef.current();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/coaching/voice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${voiceToken}` },
+        body: JSON.stringify({ sessionId: sid, transcript, exercise, coachGender: gender }),
+      });
+      const data = await res.json();
+      if (data.text) {
+        setMessages((prev) => [
+          { text: `You: ${transcript}`, timestamp: Date.now(), type: 'user' },
+          { text: data.text, timestamp: Date.now(), type: 'coach' },
+          ...prev.slice(0, 8),
+        ]);
+        if (data.audioBase64 && !isMutedRef.current) {
+          const audio = new Audio(`data:audio/mp3;base64,${data.audioBase64}`);
+          // Pause recognition while coach speaks, resume after
+          recognitionRef.current?.stop();
+          audio.onended = () => { if (isActiveRef.current) recognitionRef.current?.start(); };
+          audio.play().catch(() => {});
+        }
+      }
+    } catch { /* ignore */ }
+  }
 
-      recorder.ondataavailable = (e) => chunks.push(e.data);
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const base64 = (reader.result as string).split(',')[1];
-          try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/coaching/voice`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sessionId, audioBase64: base64, exercise: currentExercise }),
-            });
-            const data = await res.json();
-            if (data.text) {
-              setMessages((prev) => [
-                { text: `You: ${data.transcript}`, timestamp: Date.now(), type: 'user' },
-                { text: data.text, timestamp: Date.now(), type: 'coach' },
-                ...prev.slice(0, 8),
-              ]);
-              if (data.audioBase64 && !isMuted) {
-                const audio = new Audio(`data:audio/mp3;base64,${data.audioBase64}`);
-                audio.play().catch(() => {});
-              }
-            }
-          } catch { /* ignore */ }
-        };
-        reader.readAsDataURL(blob);
-        setIsListening(false);
-      };
+  // Continuous hands-free listening via Web Speech API
+  function startContinuousListening(sid: string, exercise: string, gender: 'female' | 'male') {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return; // not supported in this browser
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
 
-      recorder.start();
-      setTimeout(() => recorder.stop(), 4000); // 4-second voice clip
-    } catch {
-      setIsListening(false);
-    }
+    recognition.onresult = (event: { results: SpeechRecognitionResultList }) => {
+      const last = event.results[event.results.length - 1];
+      if (!last.isFinal) return;
+      const transcript = last[0].transcript.trim();
+      if (transcript) sendTranscript(transcript, sid, exercise, gender);
+    };
+
+    recognition.onend = () => {
+      if (isActiveRef.current) { try { recognition.start(); } catch { /* already started */ } }
+      else setIsListening(false);
+    };
+
+    recognition.onerror = () => { /* ignore abort errors */ };
+
+    try { recognition.start(); } catch { return; }
+    recognitionRef.current = recognition;
+    setIsListening(true);
+  }
+
+  function stopContinuousListening() {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    setIsListening(false);
   }
 
   // Clean up on unmount
@@ -260,7 +326,81 @@ export default function CoachingPage() {
           )}
         </div>
 
-        <div className="grid lg:grid-cols-3 gap-6">
+        <div className="flex gap-4">
+          {/* ── Left: Plan Panel ─────────────────────────────── */}
+          <div className={`flex-shrink-0 transition-all duration-300 ${planOpen ? 'w-72' : 'w-10'}`}>
+            <div className="bg-white rounded-2xl shadow-sm h-full overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                {planOpen && (
+                  <span className="font-display font-bold text-sm text-[#1a1a2e]">Your Plan</span>
+                )}
+                <button
+                  onClick={() => setPlanOpen((o) => !o)}
+                  className="ml-auto text-gray-400 hover:text-[#7C5CFC] transition"
+                >
+                  {planOpen ? '‹' : '›'}
+                </button>
+              </div>
+
+              {planOpen && (
+                <div className="p-4 overflow-y-auto max-h-[calc(100vh-220px)] space-y-5">
+                  {plan ? (
+                    <>
+                      {/* Workout */}
+                      <div>
+                        <p className="text-xs font-bold tracking-widest uppercase mb-2 flex items-center gap-1"
+                          style={{ color: 'var(--brand-purple)' }}>
+                          <span>🏋</span> Workout
+                        </p>
+                        <div className="space-y-1.5">
+                          {plan.weeklySchedule.map((d, i) => (
+                            <div key={i}
+                              className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 leading-snug">
+                              <span className="font-semibold text-[#1a1a2e]">{d.day}:</span>{' '}
+                              {d.focus}
+                              {d.duration ? <span className="text-gray-400"> · {d.duration}min</span> : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Nutrition */}
+                      {plan.nutritionGuidelines?.meals?.length > 0 && (
+                        <div>
+                          <p className="text-xs font-bold tracking-widest uppercase mb-2 flex items-center gap-1"
+                            style={{ color: 'var(--brand-purple)' }}>
+                            <span>🍽</span> Nutrition
+                          </p>
+                          <div className="space-y-1.5">
+                            {plan.nutritionGuidelines.meals.map((m, i) => (
+                              <div key={i}
+                                className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">
+                                {m}
+                              </div>
+                            ))}
+                          </div>
+                          {plan.nutritionGuidelines.dailyCalories > 0 && (
+                            <p className="text-xs text-gray-400 mt-2 px-1">
+                              🔥 Target: {plan.nutritionGuidelines.dailyCalories} kcal/day
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="text-center py-8 text-gray-400">
+                      <p className="text-2xl mb-2">📋</p>
+                      <p className="text-xs">Complete the goals form to see your personalised plan here.</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Center + Right ────────────────────────────────── */}
+          <div className="flex-1 grid lg:grid-cols-3 gap-4">
           {/* Video Feed */}
           <div className="lg:col-span-2 space-y-4">
             <div className="relative bg-gray-900 rounded-3xl overflow-hidden aspect-video shadow-xl">
@@ -325,17 +465,11 @@ export default function CoachingPage() {
                   >
                     ⏹ End Session
                   </button>
-                  <button
-                    onClick={startVoiceInput}
-                    disabled={isListening}
-                    className={`px-6 py-3 rounded-full font-semibold text-sm border-2 transition ${
-                      isListening
-                        ? 'border-rose-400 text-rose-500 bg-rose-50 animate-pulse'
-                        : 'border-[#7C5CFC] text-[#7C5CFC] hover:bg-purple-50'
-                    }`}
-                  >
-                    {isListening ? '🎙 Listening…' : '🎙 Talk to Coach'}
-                  </button>
+                  {isListening && (
+                    <div className="px-4 py-3 rounded-full text-sm border-2 border-rose-300 text-rose-500 bg-rose-50 animate-pulse font-semibold">
+                      🎙 Listening…
+                    </div>
+                  )}
                   <button
                     onClick={() => setIsMuted((m) => !m)}
                     className="px-4 py-3 rounded-full text-sm border-2 border-gray-200 text-gray-500 hover:bg-gray-50"
@@ -349,6 +483,47 @@ export default function CoachingPage() {
 
           {/* Right Panel */}
           <div className="space-y-4">
+            {/* Choose Your Coach */}
+            <div className="bg-white rounded-2xl shadow-sm p-5">
+              <h3 className="font-display font-bold text-sm text-[#1a1a2e] mb-3">Choose Your Coach</h3>
+              <div className="grid grid-cols-2 gap-3">
+                {/* Alex */}
+                <button
+                  onClick={() => setCoachGender('female')}
+                  disabled={isActive}
+                  className={`flex flex-col items-center gap-1.5 rounded-2xl border-2 p-3 transition-all disabled:cursor-not-allowed ${
+                    coachGender === 'female'
+                      ? 'border-[#7C5CFC] bg-purple-50'
+                      : 'border-gray-100 hover:border-purple-200 bg-white'
+                  }`}
+                >
+                  <span className="text-3xl">🧑‍🦱🏋️</span>
+                  <span className="font-display font-bold text-sm text-[#1a1a2e]">Alex</span>
+                  <span className="text-[10px] text-gray-400 text-center leading-tight">Warm &amp; Encouraging</span>
+                  {coachGender === 'female' && (
+                    <span className="text-[10px] font-semibold text-[#7C5CFC]">Selected ✓</span>
+                  )}
+                </button>
+                {/* Max */}
+                <button
+                  onClick={() => setCoachGender('male')}
+                  disabled={isActive}
+                  className={`flex flex-col items-center gap-1.5 rounded-2xl border-2 p-3 transition-all disabled:cursor-not-allowed ${
+                    coachGender === 'male'
+                      ? 'border-[#7C5CFC] bg-purple-50'
+                      : 'border-gray-100 hover:border-purple-200 bg-white'
+                  }`}
+                >
+                  <span className="text-3xl">🧑🏋️</span>
+                  <span className="font-display font-bold text-sm text-[#1a1a2e]">Max</span>
+                  <span className="text-[10px] text-gray-400 text-center leading-tight">Powerful &amp; Direct</span>
+                  {coachGender === 'male' && (
+                    <span className="text-[10px] font-semibold text-[#7C5CFC]">Selected ✓</span>
+                  )}
+                </button>
+              </div>
+            </div>
+
             {/* Exercise Selector */}
             <div className="bg-white rounded-2xl shadow-sm p-5">
               <h3 className="font-display font-bold text-sm text-[#1a1a2e] mb-3">Current Exercise</h3>
@@ -399,11 +574,11 @@ export default function CoachingPage() {
             {/* Coach Messages */}
             <div className="bg-white rounded-2xl shadow-sm p-5 flex-1">
               <h3 className="font-display font-bold text-sm text-[#1a1a2e] mb-3">
-                Coach Feedback
+                {coachGender === 'female' ? 'Alex' : 'Max'}&apos;s Feedback
               </h3>
               {messages.length === 0 ? (
                 <div className="text-center py-8 text-gray-400">
-                  <p className="text-3xl mb-2">🤖</p>
+                  <p className="text-3xl mb-2">{coachGender === 'female' ? '🧑‍🦱' : '🧑'}</p>
                   <p className="text-xs">Start your session to get live coaching</p>
                 </div>
               ) : (
@@ -424,7 +599,8 @@ export default function CoachingPage() {
               )}
             </div>
           </div>
-        </div>
+          </div>{/* end center+right grid */}
+        </div>{/* end flex */}
       </div>
     </div>
   );

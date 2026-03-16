@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getSession, getUserSessions, updateSession, getUserStreak } from '../services/firestore';
 import { runFeedbackAgent } from '../agents/feedbackAgent';
 import { logger } from '../utils/logger';
+import { requireAuth, AuthRequest } from '../middleware/auth';
 
 export const sessionsRouter = Router();
 
@@ -11,8 +12,23 @@ const EndSessionSchema = z.object({
   formAccuracy: z.number().min(0).max(100),
 });
 
-// POST /api/sessions/:sessionId/end — finalize session + generate AI summary
-sessionsRouter.post('/:sessionId/end', async (req, res) => {
+// GET /api/sessions/me/history — MUST be before /:sessionId to avoid "me" being treated as an ID
+sessionsRouter.get('/me/history', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 10;
+    const [sessions, streak] = await Promise.all([
+      getUserSessions(req.uid!, limit),
+      getUserStreak(req.uid!),
+    ]);
+    res.json({ sessions, streak });
+  } catch (err) {
+    logger.error('GET /sessions/me/history error', { error: err });
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+// POST /api/sessions/:sessionId/end
+sessionsRouter.post('/:sessionId/end', requireAuth, async (req: AuthRequest, res) => {
   try {
     const { sessionId } = req.params;
     const body = EndSessionSchema.parse(req.body);
@@ -22,7 +38,6 @@ sessionsRouter.post('/:sessionId/end', async (req, res) => {
       formAccuracy: body.formAccuracy,
     });
 
-    // Run Feedback Agent
     const summary = await runFeedbackAgent(sessionId);
     res.json({ sessionId, summary });
   } catch (err) {
@@ -34,8 +49,8 @@ sessionsRouter.post('/:sessionId/end', async (req, res) => {
   }
 });
 
-// GET /api/sessions/:sessionId — get session details
-sessionsRouter.get('/:sessionId', async (req, res) => {
+// GET /api/sessions/:sessionId
+sessionsRouter.get('/:sessionId', requireAuth, async (req: AuthRequest, res) => {
   try {
     const session = await getSession(req.params.sessionId);
     if (!session) return res.status(404).json({ error: 'Session not found' });
@@ -46,17 +61,3 @@ sessionsRouter.get('/:sessionId', async (req, res) => {
   }
 });
 
-// GET /api/sessions/user/:userId — get user's session history + streak
-sessionsRouter.get('/user/:userId', async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit as string) || 10;
-    const [sessions, streak] = await Promise.all([
-      getUserSessions(req.params.userId, limit),
-      getUserStreak(req.params.userId),
-    ]);
-    res.json({ sessions, streak });
-  } catch (err) {
-    logger.error('GET /sessions/user/:userId error', { error: err });
-    res.status(500).json({ error: 'Failed to fetch sessions' });
-  }
-});
