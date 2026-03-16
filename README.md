@@ -239,9 +239,9 @@ firebase deploy --only storage
 ## Hackathon Demo Steps
 
 1. Open `https://fitmind-490222.web.app`
-2. Click **Get Started** → fill the 3-step goal wizard
+2. Click **Get Started** → authenticate via gmail → fill the 3-step goal wizard
 3. Gemini 2.5 Flash generates a personalized plan in ~3 s
-4. Click **Start Session** — webcam activates, AI analyzes form every 4 s
+4. Click **Start Session** — webcam activates, AI analyzes form every 10 s
 5. Perform squats/push-ups — hear live voice coaching via TTS
 6. Say "Am I doing this right?" — voice is transcribed and answered
 7. Click **End Session** → Summary page shows stats, streak, highlights, AI quote
